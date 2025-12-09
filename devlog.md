@@ -10,6 +10,7 @@ I'm going to code as much of it as I can to completion. To begin with, I'm going
 I'll make a struct for the B-Tree Node and then I'll just make sure very basic file reading and writing works how I want it to. After that, I'll get down to
 how exactly to implement the child pointer insertions with the promotions and that whole mess. I expect that to be where most of the headache will lie.
 
+
 4 December 2025 5:20 PM
 
 I got done with the basic file handling and command parsing. Dealing with strings as argv is a lot easier than handling them from raw standard input.
@@ -20,6 +21,7 @@ output the corresponding key value pairs with the TreeNode struct. Outputting to
 csv is part of basic file handling, and inserting the values from it directly follows from the fundamental insertion logic. So, my next course of action is to
 tackle how to do insertion and promotion.
 
+
 8 December 2025 10:51 PM
 
 I have been working on the project every day, extensively so, but I have not been updating the devlog. I finished all of the basic methods apart from loading
@@ -27,4 +29,12 @@ the tree and inserting into the tree. Loading the tree is of course using the tr
 figure out so far. Granted, I have not looked up any B-Tree algorithms, but this is still much more difficult than I expected. If I used recursive logic it
 would certainly be easier to implement, but it would be much heavier on memory usage, and in practice it could get excessive depending on how many nodes need
 to be split and promoted. I'll see how much I can get done, but I'm not sure if I will be able to complete it. At a minimum, very basic insertion on a single
-node, and every other operation work as expected.
+node, and every other operation work as expected. 
+
+
+9 December 2025 2:49 AM
+
+I forgot to mention in my previous update that I adjusted my typedef struct for the big endian integers; I'm using uint64_t as the typedef for them now instead
+and am using bitwise operators (shifting) to reverse the endianness if needed. Besides that, I got my load tree function completed, since I realized I could just
+put in my insert tree function as it's the core logic in the first place. I also have a rough insertion working for 1 level, that is, the root and one level below.
+Hopefully I'll finish tomorrow, or later today I suppose.

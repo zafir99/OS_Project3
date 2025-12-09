@@ -83,6 +83,7 @@ static inline void reverseNode (TreeNode *node) {
 static inline void reverseNodeI (TreeNode *node, uint64_t numKeys) {
 	reverseBytes(&node->block_id);
 	reverseBytes(&node->parent);
+	reverseBytes(&node->numKeys);
 	for (uint64_t i = 0; i < numKeys; ++i) {
 		reverseBytes(&node->key[i]);
 		reverseBytes(&node->value[i]);
@@ -98,11 +99,13 @@ static inline void sortNode (TreeNode *node) {
 			// could do this with a single temp var instead
 			uint64_t temp_key = node->key[j];
 			uint64_t temp_val = node->value[j];
+			uint64_t temp_child = node->child[j+1];
 			node->key[j] = node->key[j-1];
 			node->value[j] = node->value[j-1];
-			node->child[j] = node->child[j-1];
+			node->child[j+1] = node->child[j];
 			node->key[j-1] = temp_key;
 			node->value[j-1] = temp_val;
+			node->child[j] = temp_child;
 			--j;
 		}
 	}
@@ -183,10 +186,11 @@ static inline void insertTree (int idxfd, Header *header, uint64_t key, uint64_t
 		while (i < node.numKeys && node.key[i] < key) {
 			++i;
 		}
-		if (node.key[i] == key) {
+		if (node.key[i] == key && node.numKeys) {
 			printf("\nERROR: Key %ld already assigned Value %ld.\n\n", key, node.value[i]);
 			break;
 		}
+
 		if (!node.child[0] && node.numKeys < MAXIMAL) {
 			node.key[node.numKeys] = key;
 			node.value[node.numKeys] = value;
@@ -194,7 +198,6 @@ static inline void insertTree (int idxfd, Header *header, uint64_t key, uint64_t
 			sortNode(&node);
 			if (!bigEndian()) {
 				reverseNodeI(&node, node.numKeys);
-				reverseBytes(&node.numKeys);
 			}
 			lseek(idxfd, -BLOCKSIZE, SEEK_CUR);
 			if (write(idxfd, &node, BLOCKSIZE) == -1) {
@@ -204,9 +207,74 @@ static inline void insertTree (int idxfd, Header *header, uint64_t key, uint64_t
 			printf("\nKey-Value Pair: (%ld, %ld) successfully inserted.\n\n", key, value);
 			break;
 		}
+		else if (!node.child[0] && node.numKeys == MAXIMAL && node.block_id == header->root_id) { // logic can likely be simplified
+			TreeNode node2, newRoot;
+			memset(&node2, 0, BLOCKSIZE);
+			memset(&newRoot, 0, BLOCKSIZE);
+
+			node2.block_id = header->next_block++;
+			newRoot.block_id = header->next_block++;
+			newRoot.numKeys = 1;
+			newRoot.child[0] = header->root_id;
+			newRoot.child[1] = node2.block_id;
+			header->root_id = newRoot.block_id;
+			newRoot.key[0] = node.key[SPLIT];
+			memcpy(node2.key, node.key+SPLIT+1, SPLIT*SIZEUINT64_T);
+			memcpy(node2.value, node.value+SPLIT+1, SPLIT*SIZEUINT64_T);
+			memset(node.key+SPLIT, 0, (SPLIT+1)*SIZEUINT64_T);
+			memset(node.value+SPLIT, 0, (SPLIT+1)*SIZEUINT64_T);
+			node.numKeys = SPLIT;
+			node2.numKeys = SPLIT;
+			node.parent = newRoot.block_id;
+			node2.parent = newRoot.block_id;
+
+			TreeNode *indirect = (key < newRoot.key[0]) ? &node : &node2;
+			indirect->key[indirect->numKeys] = key;
+			indirect->value[indirect->numKeys] = value;
+			++indirect->numKeys;
+
+			if (!bigEndian()) {
+				reverseNodeI(&node, node.numKeys);
+				reverseNodeI(&node2, node2.numKeys);
+				reverseNodeI(&newRoot, 1);
+				reverseHeader(header);
+			}
+			lseek(idxfd, 0, SEEK_SET);
+			if (write(idxfd, header, HEADERSIZE) == -1) {
+				perror("ERROR: ");
+				exit(30);
+			}
+			lseek(idxfd, BLOCKSIZE*retRev(node.block_id), SEEK_SET);
+			if (write(idxfd, &node, BLOCKSIZE) == -1) {
+				perror("ERROR: ");
+				exit(30);
+			}
+			lseek(idxfd, BLOCKSIZE*retRev(node2.block_id), SEEK_SET);
+			if (write(idxfd, &node2, BLOCKSIZE) == -1) {
+				perror("ERROR: ");
+				exit(30);
+			}
+			lseek(idxfd, BLOCKSIZE*retRev(newRoot.block_id), SEEK_SET);
+			if (write(idxfd, &newRoot, BLOCKSIZE) == -1) {
+				perror("ERROR: ");
+				exit(30);
+			}
+			printf("\nKey-Value Pair: (%ld, %ld) successfully inserted.\n\n", key, value);
+			break;
+		}
+		else if (node.numKeys == MAXIMAL) {
+			return;
+		}
+		lseek(idxfd, BLOCKSIZE*node.child[i], SEEK_SET);
+		bytesRead = read(idxfd, &node, BLOCKSIZE);
+	}
+	if (bytesRead == -1) {
+		perror("ERROR: ");
+		exit(10);
+	}
+}
+		/*
 		else if (!node.child[0] && node.numKeys == MAXIMAL) {
-			uint64_t ogkey = key;
-			uint64_t ogvalue = value;
 			while (node.numKeys == MAXIMAL) {
 				TreeNode node2;
 				memset(&node2, 0, BLOCKSIZE);
@@ -218,7 +286,7 @@ static inline void insertTree (int idxfd, Header *header, uint64_t key, uint64_t
 					newRoot.numKeys = 1;
 					newRoot.child[0] = header->root_id;
 					newRoot.child[1] = node2.block_id;
-					header->root_id = newRoot->block_id;
+					header->root_id = newRoot.block_id;
 					newRoot.key[0] = node.key[SPLIT];
 					memcpy(node2.key, node.key+SPLIT+1, SPLIT*SIZEUINT64_T);
 					memcpy(node2.value, node.value+SPLIT+1, SPLIT*SIZEUINT64_T);
@@ -287,22 +355,18 @@ static inline void insertTree (int idxfd, Header *header, uint64_t key, uint64_t
 					}
 					break;
 				}
-				if (
 			}
-			printf("\nKey-Value Pair: (%ld, %ld) successfully inserted.\n\n", ogkey, ogvalue);
+			printf("\nKey-Value Pair: (%ld, %ld) successfully inserted.\n\n", key, value);
 			break;
 		}
-		lseek(idxfd, BLOCKSIZE*node.child[i], SEEK_SET);
-		bytesRead = read(idxfd, &node, BLOCKSIZE);
-	}
-	if (bytesRead == -1) {
-		perror("ERROR: ");
-		exit(10);
-	}
-}
+		*/
 
 static inline void loadTree (int idxfd, int csvfd, Header *header) {
-
+	FILE *csv = fdopen(csvfd, "r"); // easy input parsing, i dont want to write the string to int conversions
+	uint64_t key, value;
+	while (fscanf(csv, "%ld,%ld\n", &key, &value) != EOF) {
+		insertTree(idxfd, header, key, value);
+	}
 }
 
 static inline void searchTree (int idxfd, uint64_t root, uint64_t key) {
@@ -450,7 +514,7 @@ int main (int argc, char **argv) {
 		case 3 :
 				csvfd = open(argv[3], O_RDWR, S_IRWXU);
 				if (csvfd == -1) {
-					printf("\nERROR: CSV File \"%s\" does not exist.\n\n", argv[4]);
+					printf("\nERROR: CSV File \"%s\" does not exist.\n\n", argv[3]);
 					exit(12);
 				}
 				loadTree(idxfd, csvfd, &header);
@@ -458,6 +522,7 @@ int main (int argc, char **argv) {
 					perror("\nERROR: Unable to close CSV file.\n");
 					exit(13);
 				}
+				printf("\nCSV File \"%s\" successfully loaded into tree.\n\n", argv[3]);
 			break;
 
 		case 4 :
