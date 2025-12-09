@@ -5,22 +5,23 @@
 #include <stdint.h>
 #include <string.h>
 
-#define SIZEUINT64_T 8
+#define SIZEUINT64_T sizeof(uint64_t)
 #define MAGICNUMBER "4348PRJ3"
 #define MAGICSIZE 8
 #define NUMCOMMANDS 6
+#define HEADERSIZE 24
 #define BLOCKSIZE 512
+#define REMAINING 488
 #define DEGREE 10
 #define MAXIMAL 2*DEGREE-1
+#define SPLIT (2*DEGREE-1)/2
 #define MAXCHILDREN 2*DEGREE
 #define EMPTYSPACE 24 // 24 bytes of empty space with this blocksize and TreeNode struct
+#define BUFSIZE 21
 
 const char *COMMANDS[NUMCOMMANDS] = {"create", "insert", "search", "load", "print", "extract"};
 
-typedef union {
-	uint8_t byte[SIZEUINT64_T];
-	uint64_t val;
-} be_int;
+typedef uint64_t be_int;
 
 typedef struct {
 	be_int block_id;
@@ -29,8 +30,14 @@ typedef struct {
 	be_int key[MAXIMAL];
 	be_int value[MAXIMAL];
 	be_int child[MAXCHILDREN];
-	uint8_t empty[EMPTYSPACE];
+	uint8_t empty[HEADERSIZE];
 } TreeNode;
+
+typedef struct {
+	char magic[MAGICSIZE];
+	be_int root_id;
+	be_int next_block;
+} Header;
 
 static inline int bigEndian (void) {
 	int x = 1;
@@ -38,20 +45,311 @@ static inline int bigEndian (void) {
 }
 
 static inline void reverseBytes (be_int *src) {
-	for (int i = 0; i < SIZEUINT64_T/2; ++i) {
-		uint8_t temp = src->byte[i];
-		src->byte[i] = src->byte[SIZEUINT64_T-1-i];
-		src->byte[SIZEUINT64_T-1-i] = temp;
-	}
+	*src = (*src << 56) | (*src >> 56) | (*src & 0xFF00) << 40 | (*src >> 40 & 0xFF00) | (*src & 0xFF0000) << 24 | (*src >> 24 & 0xFF0000) |
+		   (*src & 0xFF000000) << 8 | (*src >> 8 & 0xFF000000);
 }
 
-int validCommand (char *str) {
+static inline uint64_t retRev (be_int src) {
+	return (src << 56) | (src >> 56) | (src & 0xFF00) << 40 | (src >> 40 & 0xFF00) | (src & 0xFF0000) << 24 | (src >> 24 & 0xFF0000) |
+		   (src & 0xFF000000) << 8 | (src >> 8 & 0xFF000000);
+}
+
+static inline int validCommand (char *str) {
 	for (int i = 0; i < NUMCOMMANDS; ++i) {
 		if (!strcmp(str, COMMANDS[i])) {
 			return i;
 		}
 	}
 	return -1;
+}
+
+static inline void reverseHeader (Header *header) {
+	reverseBytes(&header->root_id);
+	reverseBytes(&header->next_block);
+}
+
+static inline void reverseNode (TreeNode *node) {
+	reverseBytes(&node->block_id);
+	reverseBytes(&node->parent);
+	reverseBytes(&node->numKeys);
+	for (uint64_t i = 0; i < node->numKeys; ++i) {
+		reverseBytes(&node->key[i]);
+		reverseBytes(&node->value[i]);
+		reverseBytes(&node->child[i]);
+	}
+	reverseBytes(&node->child[node->numKeys]);
+}
+
+static inline void reverseNodeI (TreeNode *node, uint64_t numKeys) {
+	reverseBytes(&node->block_id);
+	reverseBytes(&node->parent);
+	for (uint64_t i = 0; i < numKeys; ++i) {
+		reverseBytes(&node->key[i]);
+		reverseBytes(&node->value[i]);
+		reverseBytes(&node->child[i]);
+	}
+	reverseBytes(&node->child[numKeys]);
+}
+
+static inline void sortNode (TreeNode *node) {
+	for (uint64_t i = 1; i < node->numKeys; ++i) {
+		uint64_t j = i;
+		while (j > 0 && node->key[j] < node->key[j-1]) {
+			// could do this with a single temp var instead
+			uint64_t temp_key = node->key[j];
+			uint64_t temp_val = node->value[j];
+			node->key[j] = node->key[j-1];
+			node->value[j] = node->value[j-1];
+			node->child[j] = node->child[j-1];
+			node->key[j-1] = temp_key;
+			node->value[j-1] = temp_val;
+			--j;
+		}
+	}
+}
+
+static inline void shiftNode (TreeNode *node) {
+	memmove(node->key+1, node->key, (node->numKeys-1)*SIZEUINT64_T);
+	memmove(node->value+1, node->value, (node->numKeys-1)*SIZEUINT64_T);
+	memmove(node->child+1, node->key, node->numKeys*SIZEUINT64_T);
+}
+
+static inline void printTree (int idxfd) {
+	TreeNode node;
+	ssize_t bytesRead = read(idxfd, &node, BLOCKSIZE);
+	if (!bytesRead) {
+		puts("\nTree is empty.\n\n");
+		return;
+	}
+	while (bytesRead > 0) {
+		if (!bigEndian()) {
+			reverseNode(&node);
+		}
+		for (uint64_t i = 0; i < node.numKeys; ++i) {
+			printf("Key: %ld, Value: %ld\n", node.key[i], node.value[i]);
+		}
+		bytesRead = read(idxfd, &node, BLOCKSIZE);
+	}
+	if (bytesRead == -1) {
+		perror("ERROR: ");
+		exit(10);
+	}
+}
+
+static inline void printNode (TreeNode *node) {
+	for (uint64_t i = 0; i < node->numKeys; ++i) {
+		if (!bigEndian()) {
+			reverseNode(node);
+		}
+		printf("Block ID: %ld\n", node->block_id);
+		for (uint64_t i = 0; i < node->numKeys; ++i) {
+			printf("Key: %ld, Value: %ld\n", node->key[i], node->value[i]);
+		}
+	}
+}
+
+static inline void insertTree (int idxfd, Header *header, uint64_t key, uint64_t value) {
+	TreeNode node;
+	memset(&node, 0, BLOCKSIZE);
+	if (!header->root_id) {
+		header->root_id = 1;
+		header->next_block = 2;
+		node.block_id = 1;
+		if (!bigEndian()) {
+			reverseHeader(header);
+			node.block_id <<= 56;
+		}
+		lseek(idxfd, 0, SEEK_SET);
+		if (write(idxfd, header, HEADERSIZE) == -1) {
+			perror("ERROR: ");
+			exit(30);
+		}
+		lseek(idxfd, BLOCKSIZE, SEEK_SET);
+		if (write(idxfd, &node, BLOCKSIZE) == -1) {
+			perror("ERROR: ");
+			exit(30);
+		}
+		if (!bigEndian()) {
+			reverseHeader(header);
+		}
+	}
+	lseek(idxfd, BLOCKSIZE*header->root_id, SEEK_SET);
+	ssize_t bytesRead = read(idxfd, &node, BLOCKSIZE);
+	while (bytesRead > 0) {
+		if (!bigEndian()) {
+			reverseNode(&node);
+		}
+		uint64_t i = 0;
+		while (i < node.numKeys && node.key[i] < key) {
+			++i;
+		}
+		if (node.key[i] == key) {
+			printf("\nERROR: Key %ld already assigned Value %ld.\n\n", key, node.value[i]);
+			break;
+		}
+		if (!node.child[0] && node.numKeys < MAXIMAL) {
+			node.key[node.numKeys] = key;
+			node.value[node.numKeys] = value;
+			++node.numKeys;
+			sortNode(&node);
+			if (!bigEndian()) {
+				reverseNodeI(&node, node.numKeys);
+				reverseBytes(&node.numKeys);
+			}
+			lseek(idxfd, -BLOCKSIZE, SEEK_CUR);
+			if (write(idxfd, &node, BLOCKSIZE) == -1) {
+				perror("ERROR: ");
+				exit(30);
+			}
+			printf("\nKey-Value Pair: (%ld, %ld) successfully inserted.\n\n", key, value);
+			break;
+		}
+		else if (!node.child[0] && node.numKeys == MAXIMAL) {
+			uint64_t ogkey = key;
+			uint64_t ogvalue = value;
+			while (node.numKeys == MAXIMAL) {
+				TreeNode node2;
+				memset(&node2, 0, BLOCKSIZE);
+				node2.block_id = header->next_block++;
+				if (node.block_id == header->root_id) {
+					TreeNode newRoot;
+					memset(&newRoot, 0, BLOCKSIZE);
+					newRoot.block_id = header->next_block++;
+					newRoot.numKeys = 1;
+					newRoot.child[0] = header->root_id;
+					newRoot.child[1] = node2.block_id;
+					header->root_id = newRoot->block_id;
+					newRoot.key[0] = node.key[SPLIT];
+					memcpy(node2.key, node.key+SPLIT+1, SPLIT*SIZEUINT64_T);
+					memcpy(node2.value, node.value+SPLIT+1, SPLIT*SIZEUINT64_T);
+					memset(node.key+SPLIT, 0, (SPLIT+1)*SIZEUINT64_T);
+					memset(node.value+SPLIT, 0, (SPLIT+1)*SIZEUINT64_T);
+					node.numKeys = SPLIT;
+					node2.numKeys = SPLIT;
+
+					if (key < newRoot.key[0]) {
+						shiftNode(&node);
+						node.key[0] = key;
+						node.value[0] = value;
+						++node.numKeys;
+						memset(node.child+node.numKeys, 0, DEGREE*SIZEUINT64_T);
+					}
+					else {
+						shiftNode(&node2);
+						node2.key[0] = key;
+						node2.value[0] = value;
+						node2.child[0] = node.child[SPLIT+1];
+						++node2.numKeys;
+					}
+
+					for (uint64_t j = 0; j < node2.numKeys+1; ++j) {
+						if (node2.child[j]) { // update parent value of children to new right node
+							lseek(idxfd, BLOCKSIZE*node2.child[j]+SIZEUINT64_T, SEEK_SET);
+							uint64_t node2_id = node2.block_id;
+							if (!bigEndian()) {
+								reverseBytes(&node2_id);
+							}
+							if (write(idxfd, &node2_id, SIZEUINT64_T) == -1) {
+								perror("ERROR: ");
+								exit(30);
+							}
+						}
+					}
+
+					node.parent = newRoot.block_id;
+					node2.parent = newRoot.block_id;
+
+					if (!bigEndian()) {
+						reverseNode(&node);
+						reverseNode(&node2);
+						reverseNode(&newRoot);
+						reverseHeader(header);
+					}
+					lseek(idxfd, 0, SEEK_SET);
+					if (write(idxfd, header, HEADERSIZE) == -1) {
+						perror("ERROR: ");
+						exit(30);
+					}
+					lseek(idxfd, BLOCKSIZE*retRev(node.block_id), SEEK_SET);
+					if (write(idxfd, &node, BLOCKSIZE) == -1) {
+						perror("ERROR: ");
+						exit(30);
+					}
+					lseek(idxfd, BLOCKSIZE*retRev(node2.block_id), SEEK_SET);
+					if (write(idxfd, &node2, BLOCKSIZE) == -1) {
+						perror("ERROR: ");
+						exit(30);
+					}
+					lseek(idxfd, BLOCKSIZE*retRev(newRoot.block_id), SEEK_SET);
+					if (write(idxfd, &newRoot, BLOCKSIZE) == -1) {
+						perror("ERROR: ");
+						exit(30);
+					}
+					break;
+				}
+				if (
+			}
+			printf("\nKey-Value Pair: (%ld, %ld) successfully inserted.\n\n", ogkey, ogvalue);
+			break;
+		}
+		lseek(idxfd, BLOCKSIZE*node.child[i], SEEK_SET);
+		bytesRead = read(idxfd, &node, BLOCKSIZE);
+	}
+	if (bytesRead == -1) {
+		perror("ERROR: ");
+		exit(10);
+	}
+}
+
+static inline void loadTree (int idxfd, int csvfd, Header *header) {
+
+}
+
+static inline void searchTree (int idxfd, uint64_t root, uint64_t key) {
+	TreeNode node;
+	lseek(idxfd, BLOCKSIZE*root, SEEK_SET);
+	ssize_t bytesRead = read(idxfd, &node, BLOCKSIZE);
+	while (bytesRead > 0) {
+		if (!bigEndian()) {
+			reverseNode(&node);
+		}
+		uint64_t i = 0;
+		while (i < node.numKeys && node.key[i] < key) {
+			++i;
+		}
+		if (node.key[i] == key) {
+			printf("\nKey: %ld, Value: %ld\n\n", key, node.value[i]);
+			break;
+		}
+		if (!node.child[i]) {
+			printf("\nKey %ld does not exist.\n\n", key);
+			break;
+		}
+		lseek(idxfd, BLOCKSIZE*node.child[i], SEEK_SET);
+		bytesRead = read(idxfd, &node, BLOCKSIZE);
+	}
+	if (bytesRead == -1) {
+		perror("ERROR: ");
+		exit(10);
+	}
+}
+
+static inline void extractTree (int idxfd, int csvfd) {
+	TreeNode node;
+	ssize_t bytesRead = read(idxfd, &node, BLOCKSIZE);
+	while (bytesRead > 0) {
+		if (!bigEndian()) {
+			reverseNode(&node);
+		}
+		for (uint64_t i = 0; i < node.numKeys; ++i) {
+			dprintf(csvfd, "%ld,%ld\n", node.key[i], node.value[i]);
+		}
+		bytesRead = read(idxfd, &node, BLOCKSIZE);
+	}
+	if (bytesRead == -1) {
+		perror("ERROR: ");
+		exit(10);
+	}
 }
 
 const char* usage[NUMCOMMANDS] = {"<program> create <new_idx_filename>",
@@ -75,7 +373,7 @@ int main (int argc, char **argv) {
 
 	int commandNum = validCommand(argv[1]);
 	if (commandNum == -1) {
-		printf("\n\"%s\" is an invalid command.\n\n", argv[1]);
+		printf("\nERROR: \"%s\" is an invalid command.\n\n", argv[1]);
 		exit(2);
 	}
 	if (argc != expectedArg[commandNum]) {
@@ -84,6 +382,7 @@ int main (int argc, char **argv) {
 	}
 
 	int idxfd;
+	Header header;
 	if (!commandNum) {
 		idxfd = open(argv[2], O_CREAT|O_EXCL|O_RDWR, S_IRWXU);
 		if (idxfd == -1) {
@@ -98,59 +397,91 @@ int main (int argc, char **argv) {
 			exit(4);
 		}
 
-		char buf[MAGICSIZE];
-		read(idxfd, buf, MAGICSIZE);
-		if (strcmp(buf, MAGICNUMBER)) {
+		read(idxfd, &header, HEADERSIZE);
+		if (strcmp(header.magic, MAGICNUMBER)) {
 			printf("\nERROR: Index file \"%s\" is in invalid format.\n\n", argv[2]);
 			exit(5);
 		}
+		reverseHeader(&header);
+		lseek(idxfd, BLOCKSIZE, SEEK_SET);
 	}
 
+	int csvfd;
 	switch (commandNum) {
 		case 0 :
-			write(idxfd, MAGICNUMBER, MAGICSIZE);
-			be_int num = {0};
-			write(idxfd, &num, SIZEUINT64_T);
-			num.val = 1;
+			if (write(idxfd, MAGICNUMBER, MAGICSIZE) == -1) {
+				perror("ERROR: ");
+				exit(30);
+			}
+
+			header.root_id = 0;
+			if (write(idxfd, &header.root_id, SIZEUINT64_T) == -1) {
+				perror("ERROR: ");
+				exit(30);
+			}
+
+			header.next_block = 1;
 			if (!bigEndian()) {
-				reverseBytes(&num);
+				reverseBytes(&header.next_block);
 			}
-			write(idxfd, &num, SIZEUINT64_T);
-			num.val = 0;
-			uint64_t remaining = BLOCKSIZE-MAGICSIZE-(2*SIZEUINT64_T);
-			while (remaining > 0) {
-				write(idxfd, &num, SIZEUINT64_T);
-				remaining -= SIZEUINT64_T;
+
+			if (write(idxfd, &header.next_block, SIZEUINT64_T) == -1) {
+				perror("ERROR: ");
+				exit(30);
 			}
+
+			uint8_t zero[REMAINING] = {};
+			if (write(idxfd, zero, REMAINING) == -1) {
+				perror("ERROR: ");
+				exit(30);
+			}
+			
 			printf("\nIndex file \"%s\" successfully created.\n\n", argv[2]);
 			break;
 
 		case 1 :
-
+				insertTree(idxfd, &header, atol(argv[3]), atol(argv[4]));
 			break;
 
 		case 2 :
-
+				searchTree(idxfd, header.root_id, atol(argv[3]));
 			break;
 
 		case 3 :
-
+				csvfd = open(argv[3], O_RDWR, S_IRWXU);
+				if (csvfd == -1) {
+					printf("\nERROR: CSV File \"%s\" does not exist.\n\n", argv[4]);
+					exit(12);
+				}
+				loadTree(idxfd, csvfd, &header);
+				if (close(csvfd) == -1) {
+					perror("\nERROR: Unable to close CSV file.\n");
+					exit(13);
+				}
 			break;
 
 		case 4 :
-
+				printTree(idxfd);
 			break;
 
 		case 5 :
-
+				csvfd = open(argv[3], O_CREAT|O_EXCL|O_RDWR, S_IRWXU);
+				if (csvfd == -1) {
+					printf("\nERROR: CSV File \"%s\" already exists.\n\n", argv[4]);
+					exit(14);
+				}
+				extractTree(idxfd, csvfd);
+				if (close(csvfd) == -1) {
+					perror("\nERROR: Unable to close CSV file.\n");
+					exit(15);
+				}
 			break;
 
 		default :
 			puts ("\nThis shouldn't be happening!");
 	}
 
-	idxfd = close(idxfd);
-	if (idxfd == -1) {
+	if (close(idxfd) == -1) {
 		perror("\nERROR: Unable to close index file.\n");
 		exit(50);
 	}

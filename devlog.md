@@ -19,3 +19,12 @@ csv to insert into the B-Tree. The insertion logic is really the bulk of the wor
 output the corresponding key value pairs with the TreeNode struct. Outputting to csv requires that and then formatting it with a comma and newline. Reading from
 csv is part of basic file handling, and inserting the values from it directly follows from the fundamental insertion logic. So, my next course of action is to
 tackle how to do insertion and promotion.
+
+8 December 2025 10:51 PM
+
+I have been working on the project every day, extensively so, but I have not been updating the devlog. I finished all of the basic methods apart from loading
+the tree and inserting into the tree. Loading the tree is of course using the tree insertion method at its core, and the tree insertion is very complicated to
+figure out so far. Granted, I have not looked up any B-Tree algorithms, but this is still much more difficult than I expected. If I used recursive logic it
+would certainly be easier to implement, but it would be much heavier on memory usage, and in practice it could get excessive depending on how many nodes need
+to be split and promoted. I'll see how much I can get done, but I'm not sure if I will be able to complete it. At a minimum, very basic insertion on a single
+node, and every other operation work as expected.
