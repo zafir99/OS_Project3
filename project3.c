@@ -652,7 +652,7 @@ int main (int argc, char **argv) {
 		case 5 :
 				csvfd = open(argv[3], O_CREAT|O_EXCL|O_RDWR, S_IRWXU);
 				if (csvfd == -1) {
-					printf("\nERROR: CSV File \"%s\" already exists.\n\n", argv[4]);
+					printf("\nERROR: CSV File \"%s\" already exists.\n\n", argv[3]);
 					exit(14);
 				}
 				if (!validCSV(csvfd)) {
