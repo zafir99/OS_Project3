@@ -38,3 +38,20 @@ I forgot to mention in my previous update that I adjusted my typedef struct for 
 and am using bitwise operators (shifting) to reverse the endianness if needed. Besides that, I got my load tree function completed, since I realized I could just
 put in my insert tree function as it's the core logic in the first place. I also have a rough insertion working for 1 level, that is, the root and one level below.
 Hopefully I'll finish tomorrow, or later today I suppose.
+
+
+10 December 2025 7:06 PM
+
+I honestly did not expect to finish so strong. As far as I can tell, from all the testing I have done, the B-Tree works exactly as expected. I didn't even have
+to look up any algorithm examples; I just thought about how the insertion algorithm was supposed to work for a really long time. I'm very happy with my results.
+The hexdump looks just as expected, every key that was inserted can be searched for without issue, and there's decent enough error handling.
+The most difficult part of this project was dealing with the endianness. That's where nearly all my segfaults came from. A quick note: there is no error handling
+for an improperly formatted csv file, so make sure that the csv file being handed to the program is correctly formatted.
+
+
+10 December 2025 7:44 PM
+
+It was bugging me too much that I didn't have any type of error handling for a misformatted csv file so I added a method for it. Now the program properly parses
+through most .csv labelled files. And I think with that, I'm basically done with this project.
+
+
