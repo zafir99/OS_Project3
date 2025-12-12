@@ -226,71 +226,6 @@ static inline void insertTree (int idxfd, Header *header, uint64_t key, uint64_t
 			printf("\nKey-Value Pair: (%ld, %ld) successfully inserted.\n\n", key, value);
 			break;
 		}
-		else if (!node.child[0] && node.numKeys == MAXIMAL && node.block_id == header->root_id) { // logic can likely be simplified
-			TreeNode node2, newRoot;
-			memset(&node2, 0, BLOCKSIZE);
-			memset(&newRoot, 0, BLOCKSIZE);
-
-			node2.block_id = header->next_block++;
-			newRoot.block_id = header->next_block++;
-			newRoot.numKeys = 1;
-			newRoot.child[0] = header->root_id;
-			newRoot.child[1] = node2.block_id;
-			node.parent = newRoot.block_id;
-			node2.parent = newRoot.block_id;
-			header->root_id = newRoot.block_id;
-			newRoot.key[0] = node.key[SPLIT];
-			newRoot.value[0] = node.value[SPLIT];
-
-			memcpy(node2.key, node.key+DEGREE, SPLIT*SIZEUINT64_T);
-			memcpy(node2.value, node.value+DEGREE, SPLIT*SIZEUINT64_T);
-			memset(node.key+SPLIT, 0, DEGREE*SIZEUINT64_T);
-			memset(node.value+SPLIT, 0, DEGREE*SIZEUINT64_T);
-			node.numKeys = SPLIT;
-			node2.numKeys = SPLIT;
-
-			TreeNode *indirect = (key < newRoot.key[0]) ? &node : &node2;
-			indirect->key[indirect->numKeys] = key;
-			indirect->value[indirect->numKeys] = value;
-			++indirect->numKeys;
-
-			uint64_t node_id = node.block_id;
-			uint64_t node2_id = node2.block_id;
-			uint64_t newRoot_id = newRoot.block_id;
-
-			if (!bigEndian()) {
-				reverseNodeI(&node, node.numKeys);
-				reverseNodeI(&node2, node2.numKeys);
-				reverseNodeI(&newRoot, 1);
-				reverseHeader(header);
-			}
-
-			lseek(idxfd, 0, SEEK_SET);
-			if (write(idxfd, header, HEADERSIZE) == -1) {
-				perror("ERROR: ");
-				exit(30);
-			}
-			lseek(idxfd, BLOCKSIZE*node_id, SEEK_SET);
-			if (write(idxfd, &node, BLOCKSIZE) == -1) {
-				perror("ERROR: ");
-				exit(30);
-			}
-			lseek(idxfd, BLOCKSIZE*node2_id, SEEK_SET);
-			if (write(idxfd, &node2, BLOCKSIZE) == -1) {
-				perror("ERROR: ");
-				exit(30);
-			}
-			lseek(idxfd, BLOCKSIZE*newRoot_id, SEEK_SET);
-			if (write(idxfd, &newRoot, BLOCKSIZE) == -1) {
-				perror("ERROR: ");
-				exit(30);
-			}
-			printf("\nKey-Value Pair: (%ld, %ld) successfully inserted.\n\n", key, value);
-			if (!bigEndian()) {
-				reverseHeader(header);
-			}
-			break;
-		}
 		else if (!node.child[0] && node.numKeys == MAXIMAL) {
 			uint64_t child = 0;
 			uint64_t node_id = 0;
@@ -660,6 +595,7 @@ int main (int argc, char **argv) {
 					exit(16);
 				}
 				extractTree(idxfd, csvfd);
+				printf("\nTree successfully extracted to CSV File \"%s\".\n\n", argv[3]);
 				if (close(csvfd) == -1) {
 					perror("\nERROR: Unable to close CSV file.\n");
 					exit(15);
