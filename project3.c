@@ -146,7 +146,7 @@ static inline void printTree (int idxfd) {
 			reverseNode(&node);
 		}
 		for (uint64_t i = 0; i < node.numKeys; ++i) {
-			printf("Key: %ld, Value: %ld\n", node.key[i], node.value[i]);
+			printf("Key: %lu, Value: %lu\n", node.key[i], node.value[i]);
 		}
 		bytesRead = read(idxfd, &node, BLOCKSIZE);
 	}
@@ -161,9 +161,9 @@ static inline void printNode (TreeNode *node) {
 		if (!bigEndian()) {
 			reverseNode(node);
 		}
-		printf("Block ID: %ld\n", node->block_id);
+		printf("Block ID: %lu\n", node->block_id);
 		for (uint64_t i = 0; i < node->numKeys; ++i) {
-			printf("Key: %ld, Value: %ld\n", node->key[i], node->value[i]);
+			printf("Key: %lu, Value: %lu\n", node->key[i], node->value[i]);
 		}
 	}
 }
@@ -206,7 +206,7 @@ static inline void insertTree (int idxfd, Header *header, uint64_t key, uint64_t
 			++i;
 		}
 		if (node.key[i] == key && node.numKeys) { // include 0 as a valid key
-			printf("\nERROR: Key %ld already assigned Value %ld.\n\n", key, node.value[i]);
+			printf("\nERROR: Key %lu already assigned Value %lu.\n\n", key, node.value[i]);
 			break;
 		}
 
@@ -223,13 +223,13 @@ static inline void insertTree (int idxfd, Header *header, uint64_t key, uint64_t
 				perror("ERROR: ");
 				exit(30);
 			}
-			printf("\nKey-Value Pair: (%ld, %ld) successfully inserted.\n\n", key, value);
+			printf("\nKey-Value Pair: (%lu, %lu) successfully inserted.\n\n", key, value);
 			break;
 		}
 		else if (!node.child[0] && node.numKeys == MAXIMAL) {
 			uint64_t child = 0;
 			uint64_t node_id = 0;
-			printf("\nKey-Value Pair: (%ld, %ld) successfully inserted.\n\n", key, value);
+			printf("\nKey-Value Pair: (%lu, %lu) successfully inserted.\n\n", key, value);
 
 			while (node.numKeys == MAXIMAL) {
 				TreeNode node2;
@@ -415,7 +415,7 @@ static inline void insertTree (int idxfd, Header *header, uint64_t key, uint64_t
 static inline void loadTree (int idxfd, int csvfd, Header *header) {
 	FILE *csv = fdopen(csvfd, "r"); // easy input parsing, i dont want to write the string to int conversions
 	uint64_t key, value;
-	while (fscanf(csv, "%ld,%ld\n", &key, &value) != EOF) {
+	while (fscanf(csv, "%lu,%lu\n", &key, &value) != EOF) {
 		insertTree(idxfd, header, key, value);
 	}
 }
@@ -433,11 +433,11 @@ static inline void searchTree (int idxfd, uint64_t root, uint64_t key) {
 			++i;
 		}
 		if (node.key[i] == key) {
-			printf("\nKey: %ld, Value: %ld\n\n", key, node.value[i]);
+			printf("\nKey: %lu, Value: %lu\n\n", key, node.value[i]);
 			break;
 		}
 		if (!node.child[i]) {
-			printf("\nKey %ld does not exist.\n\n", key);
+			printf("\nKey %lu does not exist.\n\n", key);
 			break;
 		}
 		lseek(idxfd, BLOCKSIZE*node.child[i], SEEK_SET);
@@ -457,7 +457,7 @@ static inline void extractTree (int idxfd, int csvfd) {
 			reverseNode(&node);
 		}
 		for (uint64_t i = 0; i < node.numKeys; ++i) {
-			dprintf(csvfd, "%ld,%ld\n", node.key[i], node.value[i]);
+			dprintf(csvfd, "%lu,%lu\n", node.key[i], node.value[i]);
 		}
 		bytesRead = read(idxfd, &node, BLOCKSIZE);
 	}
