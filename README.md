@@ -3,7 +3,7 @@
 
 1. Compile the source file with gcc
 
-    gcc -o project3 project3.c
+* `gcc -o project3 project3.c`
 
 
 2. Run the object file with any of the following formats:
